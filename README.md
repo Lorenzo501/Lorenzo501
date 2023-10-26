@@ -1,4 +1,7 @@
-### Hi there 👋
+### [✧ Check out my gists](https://gist.github.com/Lorenzo501)
+
+<!--🦶FOOTER--> 
+[![](footer.svg)](#)
 
 <!--
 **Lorenzo501/Lorenzo501** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
