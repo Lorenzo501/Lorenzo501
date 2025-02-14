@@ -35,8 +35,11 @@
 	#SingleInstance Off
 	DetectHiddenWindows Off    ; which is the default
 	;#NoTrayIcon               ; do not show any icon
+Menu, Tray, Icon,,, 1 ; b/c otherwise the icon will often get stuck on the pause icon somehow (w/o actually being in the pause/suspend state)
 	vMenuTrayIcon_Show := 0
 	mMenuTrayIcon()
+
+;finishedWinIds := {}
 
 	SetWorkingDir, %A_ScriptDir%
 /*
@@ -63,7 +66,7 @@ NachHotkey:
 	Tooltip_Show_Tip      := 0
 	Tooltip_Show_Store    := 0
 	Tooltip_Show_Pause    := 0
-	Tooltip_Show_Numbers  := 1
+	Tooltip_Show_Numbers  := 0
 	DesktopIcon_CheckAfterLogin := 1
 
 	; 0: no log
@@ -76,13 +79,13 @@ NachHotkey:
 	If ( Tooltip_Show_Tip )
 		Tooltip_Show_Store  := 1
 
-	Tooltip_Show_Tip_SignOn  := 1
+	Tooltip_Show_Tip_SignOn  := 0
 	Exclude_List_Timer_Add := 1000
 	vLang_Message = 1
 	AW_AsBefore := 1
 	AA1 = 
 
-	vIniScreen_Logo_Show := TRUE
+	vIniScreen_Logo_Show := FALSE
 	split_FullScr_Sum = {Return}
 
 	#Include inc_vProgramName.ahk
@@ -108,7 +111,7 @@ NachHotkey:
 	If ( P1_Cmd = "RenameTitle" )
 	{
 		P1_Cmd = /RenameTitle
-		Tooltip `n`nBitte ändern / Please change: RENAMETITLE -> /RENAMETITLE`n`n
+		Tooltip `n`nBitte Ã¤ndern / Please change: RENAMETITLE -> /RENAMETITLE`n`n
 		Sleep 4000
 	}
 	If ( P1_Cmd = "/RenameTitle" )
@@ -306,7 +309,7 @@ CoordMode, ToolTip, Relative
 	; If ( vVersion = "" )
 	;	vVersion = V2.xx
 	If ( vAuthor = "" )
-		vAuthor = ©WinSize2.SourceForge.com 
+		vAuthor = Â©WinSize2.SourceForge.com 
 /*
  *  ?   according to the OS
  *  DE  German
@@ -458,7 +461,7 @@ mActWin_Init( Zeit )
 	split_MatchMode := 3	 ; --- Wintitle / 2: contains / 3: exact match
 	vTitleTimer := Zeit
 
-	Settimer, mActWin_Timer, %Zeit%
+	;Settimer, mActWin_Timer, %Zeit%
 
 /*
 Return
@@ -477,43 +480,117 @@ mActWin_Init( Zeit )
 
 	OnMessage( MsgNum, "ShellMessage" )
 
-	Settimer, mActWin_Timer, %Zeit%
+;https://www.magnumdb.com/search?q=title%3AEVENT_SYSTEM_MINIMIZEEND+OR+title%3AEVENT_OBJECT_DESTROY+OR+title%3AEVENT_OBJECT_SHOW
+EVENT_SYSTEM_MINIMIZEEND := 23
+;EVENT_OBJECT_DESTROY := 32769 ; gets triggered non-stop, so I'll just keep using the shell hook for that
+EVENT_OBJECT_SHOW := 32770
+DllCall("SetWinEventHook", "UInt", EVENT_SYSTEM_MINIMIZEEND, "UInt", EVENT_SYSTEM_MINIMIZEEND, "Ptr", 0, "Ptr", RegisterCallback("HandleWinEvent"), "UInt", 0, "UInt", 0, "UInt", 0)
+DllCall("SetWinEventHook", "UInt", EVENT_OBJECT_SHOW, "UInt", EVENT_OBJECT_SHOW, "Ptr", 0, "Ptr", RegisterCallback("HandleWinEvent"), "UInt", 0, "UInt", 0, "UInt", 0)
+;DllCall("SetWinEventHook", "UInt", EVENT_OBJECT_DESTROY, "UInt", EVENT_OBJECT_DESTROY, "Ptr", 0, "Ptr", RegisterCallback("HandleWinEvent"), "UInt", 0, "UInt", 0, "UInt", 0)
+
+	;Settimer, mActWin_Timer, %Zeit%
+
+Return
+}
+
+HandleWinEvent(hWinEventHook, event, hWnd, _*)
+{
+	Global
+
+if (A_IsPaused)
+	Return
+
+; This skips specific EVENT_OBJECT_DESTROY events that are unnecessary (but the shell hook doesn't generate them in the first place, so that's better b/c it uses less resources)
+;if (DllCall("GetAncestor", "Ptr", hWnd, "UInt", 2) != hwnd)
+	;Return
+	
+	; WS2 is deactivated
+	If ( vWinSize2_Not_Active = 1 )
+		Return
+
+local title, class, minMax, style
+WinGetTitle, title, ahk_id %hWnd%
+
+if (title = "")
+{
+	Sleep 400
+	WinGetTitle, title, ahk_id %hWnd%
+
+	if (title = "")
+		Return
+}
+
+WinGetClass, class, ahk_id %hWnd%
+WinGet, minMax, MinMax, ahk_id %hWnd%
+WinGet, style, Style, ahk_id %hWnd%
+
+; It being either minMax 1 or 0 means that it's not minimized
+; 0xC00000 is WS_CAPTION, which means that it has a title bar
+if ((minMax = 1 || minMax = 0) && style & 0xC00000)
+{
+	HWND_UniqueID := WinExist( title )
+	; push to stack
+	Stack_OnOff( "ShellMsg" , 0 )
+	Stack_Push( "ShellMsg" , title )
+	Stack_Push( "ShellMsg" , class )
+	Stack_OnOff( "ShellMsg" , 1 )
+	LogText := "PUSH ShellMessage to stack  :" title ": Cl=" class ": ID=" HWND_UniqueID ":"
+	mLogFile_Write( 2, LogText )
+
+	; Text := Stack_List( "ShellMsg" )
+	; msgbox Push: %Text%
+
+;static debugText := ""
+;debugText .= "`n" event " " minMax " " hWnd " " title " " class
+;Tooltip % debugText
+
+SetTimer, mProcess_ActiveWindow, -10
+}
 
 Return
 }
 
 /*
 And a new function handling the shellhook:
-http://shell.codeplex.com/wikipage?title=Shell%20Events&referringTitle=Home&ProjectName=shell
+https://web.archive.org/web/20150107010129/http://shell.codeplex.com/wikipage?title=Shell%20Events
 The wParam will be one of the following:
 
-http://doc.ddart.net/msdn/header/include/winuser.h.html
+https://web.archive.org/web/20090318162820/http://doc.ddart.net/msdn/header/include/winuser.h.html
  *
  * Shell support
  *
-#define HSHELL_WINDOWCREATED        1
-#define HSHELL_WINDOWDESTROYED      2
-#define HSHELL_ACTIVATESHELLWINDOW  3
+HSHELL_ EVENTS OMITTED B/C IT'S NOT VERY CLEAR, A BETTER ONE BELOW
 
-#if(WINVER >= 0x0400)
-#define HSHELL_WINDOWACTIVATED      4
-#define HSHELL_GETMINRECT           5
-#define HSHELL_REDRAW               6
-#define HSHELL_TASKMAN              7
-#define HSHELL_LANGUAGE             8
-#if(_WIN32_WINNT >= 0x0500)
-#define HSHELL_ACCESSIBILITYSTATE   11
-#define    ACCESS_STICKYKEYS            0x0001
-#define    ACCESS_FILTERKEYS            0x0002
-#define    ACCESS_MOUSEKEYS             0x0003
-; _WIN32_WINNT >= 0x0500
-#endif 
-; WINVER >= 0x0400
-#endif 
+https://www.magnumdb.com/search?q=title%3AHSHELL_*
+HSHELL_WINDOWCREATED		1
+HSHELL_WINDOWDESTROYED		2
+HSHELL_ACTIVATESHELLWINDOW	3
+HSHELL_WINDOWACTIVATED		4
+HSHELL_GETMINRECT		5
+HSHELL_REDRAW			6
+HSHELL_TASKMAN			7
+HSHELL_LANGUAGE			8
+HSHELL_SYSMENU			9
+HSHELL_ENDTASK			10
+HSHELL_ACCESSIBILITYSTATE	11
+HSHELL_APPCOMMAND		12
+HSHELL_WINDOWREPLACED		13
+HSHELL_WINDOWREPLACING		14
+HSHELL_MONITORCHANGED		16
+HSHELL_HIGHBIT			32768
+HSHELL_FLASH			32774
+HSHELL_RUDEAPPACTIVATED		32772
+
+None of these were usable for detecting when the user unminimizes an app,
+which is necessary because these HSHELL_ events causes minimized apps to become unminimized/affected by this script
+They should obviously remain minimized. Therefore I'll use a different event watcher as well that's taking over this responsibility
 */
 ShellMessage( wParam, lParam ) 
 {
 	Global
+
+	if (A_IsPaused)
+		Return
 	
 	; WS2 is deactivated
 	If ( vWinSize2_Not_Active = 1 )
@@ -521,9 +598,10 @@ ShellMessage( wParam, lParam )
 
 	; If ( Name <> "" )
 	; If ( wParam = 1 )
-	If ( wParam = 1 OR wParam = 2 )
+	If ( wParam = 2 )
 	{
-	;  name of process identified by lParam
+local Title, Class ;, windowToProcess
+		;  name of process identified by lParam
 		WinGet , Name  , ProcessName , ahk_id %lParam%
 		;  list of windows owned by the program
 		WinList1 :=
@@ -540,7 +618,19 @@ ShellMessage( wParam, lParam )
 		; Tooltip ShellMessage %wParam%  %lParam%  "%Name%"
 
 		AW_Title_hWnd := WinList1
-		
+
+/*
+windowToProcess := % Title Class
+if (finishedWinIds.HasKey(windowToProcess))
+{
+	loop % finishedWinIds[windowToProcess].Length()
+		if (finishedWinIds[windowToProcess][A_Index] = hWnd)
+		{
+			finishedWinIds.RemoveAt(A_Index)
+			break
+		}
+}
+*/
 		
 		If 0   ; If ( wParam = 1 )
 		{
@@ -566,25 +656,8 @@ ShellMessage( wParam, lParam )
 			;* EEEE
 		}
 
-		If ( wParam = 1 )
-		{
-			HWND_UniqueID := WinExist( Title )
-			; push to stack
-			Stack_OnOff( "ShellMsg" , 0 )
-			Stack_Push( "ShellMsg" , Title )
-			Stack_Push( "ShellMsg" , Class )
-			Stack_OnOff( "ShellMsg" , 1 )
-			LogText := "PUSH ShellMessage to stack  :" Title ": Cl=" Class ": ID=" HWND_UniqueID ":"
-			mLogFile_Write( 2, LogText )
-
-			; Text := Stack_List( "ShellMsg" )
-			; msgbox Push: %Text%
-		}
-		If ( wParam = 2 )
-		{
-			LogText := "Window is finished; ShellMessage 2 from Windows"
-			mLogFile_Write( 3, LogText )
-		}
+		LogText := "Window is finished; ShellMessage 2 from Windows"
+		mLogFile_Write( 3, LogText )
 
 	}
 	
@@ -710,7 +783,7 @@ mActWin_Timer:
 		mProcess_ActiveWindow()
 	}
 	
-	SetTimer, mActWin_Timer, On
+	;SetTimer, mActWin_Timer, On
 
 Return
 }
@@ -723,15 +796,14 @@ mActWin_Timer_SetTimer( OnOff )
 {
 	If ( OnOff = 0 )
 		SetTimer, mActWin_Timer, Off
-	Else
-		SetTimer, mActWin_Timer, On
+	;Else
+		;SetTimer, mActWin_Timer, On
 Return
 }
  */
 
 mProcess_ActiveWindow()
 {
-
 	Global
 	
 	LogTrace := "Trace: "
@@ -740,21 +812,24 @@ mProcess_ActiveWindow()
 	; =*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*
 	; --- get parameter of Active Window (AW_.. ) window must be visible
 	; Delete_All_Tooltips()
-	WinGetActiveStats , New_Title, New_Width, New_Height, New_X, New_Y
-	WinGetClass , AW_AhkClass, %New_Title%
-	AW_UniqueID := WinExist( New_Title )
+   ;	WinGetActiveStats , New_Title, New_Width, New_Height, New_X, New_Y
+   ;	WinGetClass , AW_AhkClass, %New_Title%
+   ;	AW_UniqueID := WinExist( New_Title )
 
 mProcess_ShellMessage:
-	LogTrace .= ":1=" New_Title ": Cl=" AW_AhkClass ": ID=" AW_UniqueID
-	New_Title1 =   ; if string is empty
-	StringSplit , New_Title, New_Title, `n
-	New_Title := New_Title1
+   ;	LogTrace .= ":1=" New_Title ": Cl=" AW_AhkClass ": ID=" AW_UniqueID
+   ;	New_Title1 =   ; if string is empty
+   ;	StringSplit , New_Title, New_Title, `n
+   ;	New_Title := New_Title1
 	
+AW_AhkClass := Stack_Pop( "ShellMsg" )
+AW_Title := Stack_Pop( "ShellMsg" )
+
 	; --- should also work, if window does not have the focus
 	;     e.g. in case of a window where we got a "Created Message"
 	;     that is not active now
-	WinGet      , AW_UniqueID, ID, %New_Title% ahk_class %AW_AhkClass%
-	WinGetPos   , New_X, New_Y, New_Width, New_Height, %New_Title% ahk_class %AW_AhkClass%
+	WinGet      , AW_UniqueID, ID, %AW_Title% ahk_class %AW_AhkClass%
+	WinGetPos   , New_X, New_Y, New_Width, New_Height, %AW_Title% ahk_class %AW_AhkClass%
 	
 	; WinGetTitle , New_Title, ahk_id %AW_UniqueID%
 	; New_Title1 =   ; if string is empty
@@ -764,7 +839,7 @@ mProcess_ShellMessage:
 
 	; Tooltip % "New_Title-1:`n" New_Title "`n" AW_UniqueID "  Cl=" AW_AhkClass "`n" New_Width " / " New_Height " / " New_X " / " New_Y  ;%;
 	; =*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*
-
+   /*
 	; --- remember the last window activated -------------------------
 	;     for "Last Add/Overwrite" and "Last Delete" in the try
 	If ( New_Title != "" )
@@ -819,18 +894,16 @@ mProcess_ShellMessage:
 				
 				; ------------------------
 				ChkInactiveWindows()
-				If ( Inactive_RowNo = 0 )
-				{
-				/*
-					Tooltip WinActivate  %Inactive_Title%  %Inactive_RowNo%
-					WinActivate , %Inactive_Title%
-					LogText := "WinActivate:" Inactive_Title ":"
-					mLogFile_Write( 4, LogText )
-					Sleep 4000
-					AW_Last_UniqueID := 0   ; prevent entering a second time
-					Goto mActWin_2nd_Time
-				*/
-				}
+				;If ( Inactive_RowNo = 0 )
+				;{
+					;Tooltip WinActivate  %Inactive_Title%  %Inactive_RowNo%
+					;WinActivate , %Inactive_Title%
+					;LogText := "WinActivate:" Inactive_Title ":"
+					;mLogFile_Write( 4, LogText )
+					;Sleep 4000
+					;AW_Last_UniqueID := 0   ; prevent entering a second time
+					;Goto mActWin_2nd_Time
+				;}
 				LogTrace .= ":1.3"
 				
 				;------------------------------------------------------------------------------
@@ -843,16 +916,14 @@ mProcess_ShellMessage:
 				
 				If ( New_Title <> "" )
 				{
-					/*
 					;* AAAA
-					TTL := 003
-					TTLMsg := ATime() ":  (" TTL ")  ShellMessage Pop from stack  :" New_Title ": Cl=" AW_AhkClass
-					Tooltip_%TTL% := TTLMsg
-					CoordMode, ToolTip, Screen
-					Tooltip %TTLMsg%  ,TTX , TTL*TTM, TTL+TTP ;%
-					CoordMode, ToolTip, Relative
+					;TTL := 003
+					;TTLMsg := ATime() ":  (" TTL ")  ShellMessage Pop from stack  :" New_Title ": Cl=" AW_AhkClass
+					;Tooltip_%TTL% := TTLMsg
+					;CoordMode, ToolTip, Screen
+					;Tooltip %TTLMsg%  ,TTX , TTL*TTM, TTL+TTP ;%
+					;CoordMode, ToolTip, Relative
 					;* EEEE
-					*/
 
 					LogText := "POP ShellMessage from stack  :" New_Title ": Cl=" AW_AhkClass
 					mLogFile_Write( 4, LogText )
@@ -881,7 +952,8 @@ mProcess_ShellMessage:
 		
 		; Display_All_AW_Slots(13)
 	}
-	AW_Title := New_Title
+   */
+   ;	AW_Title := New_Title
 	AW_Width := New_Width
 	AW_Height := New_Height
 	AW_X := New_X
@@ -1134,9 +1206,30 @@ WinGetActiveStatsError:
 				
 				Exclude_List_Timer := 0
 				Exclude_List()
-				If ( AW_Title_Fnd_inExcludeTable = 0 
+static finishedWinIds := {}
+/*
+WinGet, AW_UniqueID, ID, %AW_Title% ahk_class %AW_AhkClass%
+local windowToProcess := % AW_Title AW_AhkClass
+local mayContinue := 1
+if (finishedWinIds.HasKey(windowToProcess))
+{
+	loop % finishedWinIds[windowToProcess].Length()
+		if (finishedWinIds[windowToProcess][A_Index] = AW_UniqueID)
+		{
+			mayContinue := 0
+			break
+		}
+}
+else
+	finishedWinIds[windowToProcess] := []
+*/
+
+				If ( ( AW_Title_Fnd_inExcludeTable = 0 
 					OR XYWH_or_Always 
 					OR command_nr = 1 )
+AND ( !finishedWinIds.HasKey(windowToProcess)
+	OR finishedWinIds[windowToProcess] != AW_UniqueID ) )
+;AND mayContinue )
 				{
 
 					; check the Title does exist: if not, UniqueID is set to blank
@@ -1176,6 +1269,8 @@ WinGetActiveStatsError:
 					mLogFile_Write( 3, LogText )
 
 					WinMove     %AW_Title% ahk_class %AW_AhkClass% ,, %AMove_2%, %AMove_3%, %AMove_4%, %AMove_5%
+finishedWinIds[windowToProcess] := AW_UniqueID
+;finishedWinIds[windowToProcess].Push(AW_UniqueID)
 
 					;  wait a time and read back the paras of the moved window
 					; Sleep 50
@@ -1291,7 +1386,7 @@ WinGetActiveStatsError:
 					{
 						LogTrace .= ":8a"
 						WinSet AlwaysOnTop, Off, A
-						tooltip WinSet AlwaysOnTop Off 001
+						;tooltip WinSet AlwaysOnTop Off 001
 					}
 				}
 				Else
@@ -1300,7 +1395,7 @@ WinGetActiveStatsError:
 					{
 						LogTrace .= ":8b"
 						WinSet AlwaysOnTop, On, A
-						tooltip WinSet AlwaysOnTop On 002
+						;tooltip WinSet AlwaysOnTop On 002
 					}
 				}
 				
@@ -1403,7 +1498,7 @@ WinSize2_IniScreen_Show()
 	Gui, 2:Font, S12 W800, %FontName%
 	Gui, 2:Add, Picture, x1 y1    h320 w400, WinSize2_IniScreen.jpg
 	Gui, 2:Add, Text, x270 y275 w200 h30 giVersion, %iVersion%
-	Gui, 2:Show, Center h322 w402 Border, WinSize2 INI
+	Gui, 2:Show, Center h322 w402, WinSize2 INI
 Return
 
 iVersion:
@@ -1663,7 +1758,7 @@ CoordMode, ToolTip, Relative
 				AIndex := AWNr_CntEntries + 1
 				; msgbox vCtrl_Alt_Y_Cnt %vCtrl_Alt_Y_Cnt% AWNr_CntEntries+1: %AWNr_CntEntries%
 				; AIndex := AWNr_CntEntries
-				; Msgbox nächstes nehmen: %AIndex% 
+				; Msgbox nÃ¤chstes nehmen: %AIndex% 
 				; sleep 3000
 			}
 			AW_NeuEintrag := True
@@ -1856,7 +1951,7 @@ CoordMode, ToolTip, Relative
 					If ( Window_AlwaysOnTop )
 					{
 						WinSet AlwaysOnTop, Off, %split_Title%
-						tooltip WinSet AlwaysOnTop Off 003
+						;tooltip WinSet AlwaysOnTop Off 003
 					}
 				}
 				Else
@@ -1864,7 +1959,7 @@ CoordMode, ToolTip, Relative
 					If ( ! Window_AlwaysOnTop )
 					{
 						WinSet AlwaysOnTop, On,  %split_Title%
-						tooltip WinSet AlwaysOnTop On 004
+						;tooltip WinSet AlwaysOnTop On 004
 					}
 				}
 				
@@ -1892,7 +1987,7 @@ CoordMode, ToolTip, Relative
 	IniFile_Write_All = 1 
 	; Sleep %vTooltipPubSleepVeryShort%
 
- 	SetTimer, mActWin_Timer, On
+ 	;SetTimer, mActWin_Timer, On
 Return
 }
 
@@ -2234,7 +2329,7 @@ mActWin_CheckExists()
 		split_MatchMode_Set( AWNr_Array_6 )
 
 		; Tooltip Split: %AWNr_Array_1%
-		; Titel ist in Tabelle vorhanden; Index zurückgeben
+		; Titel ist in Tabelle vorhanden; Index zurÃ¼ckgeben
 		; If ( AW_Title = AWNr_Array_1 )
 		; Tooltip search: %AW_Title% // %AWNr_Array_1%
 		; Sleep %vTooltipIntSleep%
@@ -2529,11 +2624,11 @@ Tooltip_Next()
  *    IniFile_Write_All := 1
  *
  * ----------------------------------------------------------------------------
- *  Wenn das Hauptprogramm Änderungen an den INI-Werten erkennt, sollte es
+ *  Wenn das Hauptprogramm Ã„nderungen an den INI-Werten erkennt, sollte es
  *
  *    IniFile_Write_All := 1
  *
- *  setzen. Die Schreibroutine sollten nicht zu häufig gerufen werden
+ *  setzen. Die Schreibroutine sollten nicht zu hÃ¤ufig gerufen werden
  *  (z.B. alle 5 sek oder langfristiger), um den Schreibaufwand auf die
  *  Platte nicht zu hoch werden zu lassen (z.B. wenn ein Fenster auf dem
  *  Bildschirm bewegt wird).
@@ -2545,7 +2640,7 @@ Tooltip_Next()
  *  The following function definitions are skipped.
  * ----------------------------------------------------------------------------
  *  dieses ist das einzige Kommando, das im Kopfbereich des AHK-Files
- *  ausgeführt wird. Die nachfolgenden Funktionsdefinitionen werden übersprungen.
+ *  ausgefÃ¼hrt wird. Die nachfolgenden Funktionsdefinitionen werden Ã¼bersprungen.
  */
 
  ; CALL 
@@ -2800,9 +2895,11 @@ mIniWrite_All()
 		;*** (1016)  INI file was read - has been overwritten by the user
 		; Message := Message_Get( 1016 ) " / " IniFile_FileTime_Old " / " IniFile_FileTime
 		Message := Message_Get( 1016 )
+		/*
 		If ( Tooltip_Next() )
 			Tooltip %Message% ,vCtrl_Alt_Y_MouseX,vCtrl_Alt_Y_MouseY,20
-			mLogFile_Write( 1, Message )
+		*/
+		mLogFile_Write( 1, Message )
 	}
 	Else
 	{
@@ -3638,11 +3735,11 @@ mCtrl_Alt_Y_Hotkey_SetMessage()
  *  just replace for the whole text the "Ctrl_Alt_Y" with you new
  *  keys (e.g. "Win_X") and adjust the "<<<<<" lines.
  *------------------------------------------------------------------------
- *  Hotkey-Methode für eine spezielle Taste
+ *  Hotkey-Methode fÃ¼r eine spezielle Taste
  *
- *  Diese Methode kapselt auch die über ein implizites Gosub angesprungenen
+ *  Diese Methode kapselt auch die Ã¼ber ein implizites Gosub angesprungenen
  *  Routinen des Hotkeys und des Timers, so dass sie bei einem #Include
- *  im Kopf-Teil eines Programms übersprungen werden.
+ *  im Kopf-Teil eines Programms Ã¼bersprungen werden.
  *
  *  Bitte beachten Sie:
  *  -------------------
@@ -3654,7 +3751,7 @@ mCtrl_Alt_Y_Hotkey_SetMessage()
  *  durch Ihre Tasten.
  *
  *************************************************************************
- *   Aufruf (auch für eine Umdefinition zur Laufzeit):
+ *   Aufruf (auch fÃ¼r eine Umdefinition zur Laufzeit):
  *   Call (also for run-time redefinition):
  */
 
@@ -3806,7 +3903,7 @@ Return	; END mCtrl_Alt_Y_Init
 /*
  *------------------------------------------------------------------------
  *
- * erreicht dieses Label nur, wenn der nächste Buchstabe nicht mehr
+ * erreicht dieses Label nur, wenn der nÃ¤chste Buchstabe nicht mehr
  * rechtzeitig kommt !
  * --------------------
  * only reaches this label if the next char is not pressed before the
